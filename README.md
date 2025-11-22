@@ -16,6 +16,7 @@ Each laboratory has its own folder `lab-XY`, containing:
 ### Compiling
 To build the executable for a laboratory, make sure you have loaded the needed modules with
 ```bash
+$ source /u/sw/etc/bash.bashrc
 $ module load gcc-glibc dealii
 ```
 Then, from the folder `lab-XY`, run the following commands:
