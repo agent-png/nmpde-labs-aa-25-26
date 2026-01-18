@@ -40,13 +40,17 @@ public:
   static constexpr unsigned int dim = 1;
 
   // Constructor.
-  ADR1D(const unsigned int                              &N_el_,
+ADR1D(      const unsigned int                              &N_el_,
             const unsigned int                              &r_,
             const std::function<double(const Point<dim> &)> &mu_,
+            const std::function<double(const Point<dim> &)> &b_,
+            const std::function<double(const Point<dim> &)> &sigma_,
             const std::function<double(const Point<dim> &)> &f_)
     : N_el(N_el_)
     , r(r_)
     , mu(mu_)
+    , b(b_)
+    , sigma(sigma_)
     , f(f_)
   {}
 
@@ -75,6 +79,7 @@ protected:
   // Number of elements.
   const unsigned int N_el;
 
+  // Size of mesh element.
   const double h = 1/N_el;
 
   // Polynomial degree.
@@ -83,6 +88,15 @@ protected:
   // Diffusion coefficient.
   std::function<double(const Point<dim> &)> mu;
 
+  // Convection/Advection (transport) coefficient.
+  std::function<double(const Point<dim> &)> b;
+
+  // Reaction coefficient.
+  std::function<double(const Point<dim> &)> sigma;
+
+  // Gamma function (Neumann condition).
+  std::function<double(const Point<dim> &)> gamma;
+
   // Forcing term.
   std::function<double(const Point<dim> &)> f;
 
@@ -90,20 +104,9 @@ protected:
   Triangulation<dim> mesh;
 
   // Finite element space.
-  //
-  // We use a unique_ptr here so that we can choose the type and degree of the
-  // finite elements at runtime (the degree is a constructor parameter).
-  //
-  // The class FiniteElement<dim> is an abstract class from which all types of
-  // finite elements implemented by deal.ii inherit. Using the abstract class
-  // makes it very easy to switch between different types of FE space among the
-  // many that deal.ii provides.
   std::unique_ptr<FiniteElement<dim>> fe;
 
   // Quadrature formula.
-  //
-  // We use a unique_ptr here so that we can choose the type and order of the
-  // quadrature formula at runtime (the order is a constructor parameter).
   std::unique_ptr<Quadrature<dim>> quadrature;
 
   // DoF handler.

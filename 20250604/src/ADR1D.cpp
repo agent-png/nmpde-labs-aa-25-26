@@ -30,10 +30,6 @@ ADR1D::setup()
   {
     std::cout << "Initializing the finite element space" << std::endl;
 
-    // Finite elements in one dimension are obtained with the FE_Q or
-    // FE_SimplexP classes (the former is meant for hexahedral elements, the
-    // latter for tetrahedra, but they are equivalent in 1D). We use FE_SimplexP
-    // here for consistency with the next labs.
     fe = std::make_unique<FE_SimplexP<dim>>(r);
 
     std::cout << "  Degree                     = " << fe->degree << std::endl;
@@ -58,9 +54,7 @@ ADR1D::setup()
     // Initialize the DoF handler with the mesh we constructed.
     dof_handler.reinit(mesh);
 
-    // "Distribute" the degrees of freedom. For a given finite element space,
-    // initializes info on the control variables (how many they are, where
-    // they are collocated, their "global indices", ...).
+    // Distribute the degrees of freedom.
     dof_handler.distribute_dofs(*fe);
 
     std::cout << "  Number of DoFs = " << dof_handler.n_dofs() << std::endl;
@@ -72,12 +66,6 @@ ADR1D::setup()
   {
     std::cout << "Initializing the linear system" << std::endl;
 
-    // We first initialize a "sparsity pattern", i.e. a data structure that
-    // indicates which entries of the matrix are zero and which are different
-    // from zero. To do so, we construct first a DynamicSparsityPattern (a
-    // sparsity pattern stored in a memory- and access-inefficient way, but
-    // fast to write) and then convert it to a SparsityPattern (which is more
-    // efficient, but cannot be modified).
     std::cout << "  Initializing the sparsity pattern" << std::endl;
     DynamicSparsityPattern dsp(dof_handler.n_dofs());
     DoFTools::make_sparsity_pattern(dof_handler, dsp);
@@ -120,7 +108,7 @@ ADR1D::assemble()
     // - the derivative of shape functions (update_gradients);
     // - the position of quadrature points (update_quadrature_points);
     // - the quadrature weights (update_JxW_values).
-    update_values | update_gradients | update_hessians | update_quadrature_points |
+    update_values | update_gradients /*| update_hessians*/ | update_quadrature_points |
       update_JxW_values);
 
   // Local matrix and right-hand side vector. We will overwrite them for
@@ -135,18 +123,15 @@ ADR1D::assemble()
   // Reset the global matrix and vector, just in case.
   system_matrix = 0.0;
   system_rhs    = 0.0;
-  const auto mu_d   = [](const Point<dim> &p) { return 2 * 0.01 * p[0]; };
 
   for (const auto &cell : dof_handler.active_cell_iterators())
     {
       // Reinitialize the FEValues object on current element. This
-      // precomputes all the quantities we requested when constructing
-      // FEValues (see the update_* flags above) for all quadrature nodes of
+      // precomputes all the quantities we requested for all quadrature nodes of
       // the current cell.
       fe_values.reinit(cell);
 
-      // We reset the cell matrix and vector (discADRing any leftovers from
-      // previous element).
+      // We reset the cell matrix and vector.
       cell_matrix = 0.0;
       cell_rhs    = 0.0;
 
@@ -155,7 +140,8 @@ ADR1D::assemble()
           // Here we assemble the local contribution for current cell and
           // current quadrature point, filling the local matrix and vector.
           const double mu_loc = mu(fe_values.quadrature_point(q));
-          const double mu_loc_d = mu_d(fe_values.quadrature_point(q));
+          const double b_loc = b(fe_values.quadrature_point(q));
+          const double sigma_loc = sigma(fe_values.quadrature_point(q));
           const double f_loc  = f(fe_values.quadrature_point(q));
 
           // Here we iterate over *local* DoF indices.
@@ -163,73 +149,96 @@ ADR1D::assemble()
             {
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
+                  // Diffusion term.
                   cell_matrix(i, j) += mu_loc *                     //
                                        fe_values.shape_grad(i, q) * //
                                        fe_values.shape_grad(j, q) * //
                                        fe_values.JxW(q);
-
-                  cell_matrix(i, j) += fe_values.shape_value(i, q) * //
+                  // Transport term.
+                  cell_matrix(i, j) += b_loc *                          //
+                                       fe_values.shape_value(i, q)    * //
                                        fe_values.shape_grad(j, q)[0]  * //
                                        fe_values.JxW(q);
-                  cell_matrix(i, j) += h * mu_loc_d * mu_loc_d *
-                                       fe_values.shape_hessian(i, q)[0][0] * //
-                                       fe_values.shape_hessian(j, q)[0][0] * //
+                  // Reaction term.
+                  cell_matrix(i, j) += sigma_loc *
+                                       fe_values.shape_value(i, q) * //
+                                       fe_values.shape_value(j, q) * //
                                        fe_values.JxW(q);
-                  cell_matrix(i, j) += h * mu_loc_d *
-                                       fe_values.shape_hessian(i, q)[0][0] * //
-                                       fe_values.shape_grad(j, q)[0]       * //
-                                       fe_values.JxW(q);
-                  cell_matrix(i, j) += h * mu_loc_d *
-                                       fe_values.shape_grad(i, q)[0]       * //
-                                       fe_values.shape_hessian(j, q)[0][0] * //
-                                       fe_values.JxW(q);
-                  cell_matrix(i, j) += h * 
-                                       fe_values.shape_grad(i, q) * //
-                                       fe_values.shape_grad(j, q) * //
-                                       fe_values.JxW(q);
-                }           
-
+                }
+              // Forcing funciton f contribution.
               cell_rhs(i) += f_loc *                       //
                              fe_values.shape_value(i, q) * //
                              fe_values.JxW(q);
             }
         }
 
-      // At this point the local matrix and vector are constructed: we need
-      // to sum them into the global matrix and vector. To this end, we need
-      // to retrieve the global indices of the DoFs of current cell.
+      // Neumann boundary conditions.
+      /*
+      gamma  = [](const Point<dim> &p) { return p[0]; //Replace accordingly!! };
+      if (cell->at_boundary())
+      {
+        // We loop over its edges.
+        for (unsigned int face_number = 0; face_number < cell->n_faces(); ++face_number)
+        {
+          // If current face lies on the boundary, and its boundary ID (or
+          // tag) is that of one of the Neumann boundaries, we assemble the
+          // boundary integral.
+          if (cell->face(face_number)->at_boundary() &&
+          //replace conditions on boundary_id as necessary!!!
+            (cell->face(face_number)->boundary_id() == 0 ||
+              cell->face(face_number)->boundary_id() == 1))
+          {
+            fe_values_boundary.reinit(cell, face_number);
+
+            for (unsigned int q = 0; q < quadrature_boundary->size(); ++q)
+            {
+              for (unsigned int i = 0; i < dofs_per_cell; ++i)
+                cell_rhs(i) +=
+                  gamma(fe_values_boundary.quadrature_point(q)) * //
+                  fe_values_boundary.shape_value(i, q) *      //
+                  fe_values_boundary.JxW(q);
+            }
+          }
+        }
+      }
+      */
+
+      // Retrieve the global indices of the DoFs of current cell.
       cell->get_dof_indices(dof_indices);
 
-      // Then, we add the local matrix and vector into the corresponding
+      // Add the local matrix and vector into the corresponding
       // positions of the global matrix and vector.
       system_matrix.add(dof_indices, cell_matrix);
       system_rhs.add(dof_indices, cell_rhs);
     }
 
-  // Boundary conditions.
-  //
-  // So far we assembled the matrix as if there were no Dirichlet conditions.
-  // Now we want to replace the rows associated to nodes on which Dirichlet
-  // conditions are applied with equations like u_i = b_i. We use deal.ii
-  // functions to
+  // Boundary conditions (Dirichlet).
   {
     // We construct a map that stores, for each DoF corresponding to a Dirichlet
     // condition, the corresponding value. E.g., if the Dirichlet condition is
     // u_i = b_i, the map will contain the pair (i, b_i).
     std::map<types::global_dof_index, double> boundary_values;
 
-    // This object represents our boundary data as a real-valued function (that
-    // always evaluates to zero). Other functions may require to implement a
-    // custom class derived from dealii::Function<dim>.
+    // Dirichlet function. Some ways of having it (zero, constant, custom)
     Functions::ZeroFunction<dim> zero_function;
-    Functions::ConstantFunction<dim> one_function(1.0);
-    
+    Functions::ConstantFunction<dim> one_function(/*constant = */ 1.0);
+    class G_Function : public Function<dim>
+    {
+    public:
+      G_Function() : Function<dim>(1){} // Constructor.
+
+      virtual double value(const Point<dim> &p, const unsigned int component = 0) const override
+      {
+        return p[0]; // just an example, replace accordingly.
+      }
+    };
+    G_Function g;
 
     // Then, we build a map that, for each boundary tag, stores a pointer to the
     // corresponding boundary function.
     std::map<types::boundary_id, const Function<dim> *> boundary_functions;
     boundary_functions[0] = &zero_function;
-    boundary_functions[1] = &one_function;
+    boundary_functions[1] = &zero_function;
 
     // interpolate_boundary_values fills the boundary_values map.
     VectorTools::interpolate_boundary_values(dof_handler,
