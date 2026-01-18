@@ -1,0 +1,41 @@
+- Open input files
+    - Use apply otherwise nothing is shown
+    - Sopra il box pipeline browser si può scegliere la variabile da visualizzare, scegliere se una componente
+      o tutta la magnitude. Si può cambiare la rappresentazione (surface, surface with edges, wireframe, points, volume)
+    - Nella barra ancora sopra si possono controllare i timesteps (andare avanti e indietro sono i simbolini come sui lettori cd)
+    - Si possono visualizzare più render contemporaneamente e indipendentemente. Con link camera si muovono insieme
+    
+- Apply filters
+    - use ctrl + space to search available filters
+    - Again click apply to apply
+    - clip -> split on a plane to see different sections of the object
+    - slice -> similar to clip but only shows the intersection with the plane
+    - cleanToGrid -> removes duplicate points
+    - glyph -> show vectors as arrows (play with scaling and stuff to visualize better)
+    - streamTracer -> show vector fields as lines (not arrows like before)
+    - calculator -> compute a given expression (in each point?) and get a new variable (can also be a vector)
+    - computeDerivatives -> computes derivatives...
+    - GradientOfUnstructuredDataSet -> similar to computeDerivatives but more complete and can calculate more stuff
+    - warpByVector -> move every point in the domain by the vector we specify * a scaling factor
+    - warpByScalar -> the same as before but by a scalar. You need to provide a direction in this case
+    - AnnotateTime -> mette un time nella render view, utile se si fa save animation per vedere l'ordine
+    - GenerateSurfaceNormals -> generates the normal vector to a surface 
+    - IntegrateVariables -> computes the integral of every possible variable
+    
+- Comparing two files
+    - open to files
+    - AppendAttributes -> filter to compare variables of the two files (the files must have the same mesh). Select
+                          the two files and apply the filter.
+                          Very useful, now for ex we can use the calculator filter to subtract quantities from the 
+                          different solutions and so on
+
+- 2D plots
+    - PlotOverLine -> filter that plots over a line that can be put where we want
+    - PlotSelectionOverTime -> plot a selected point over time
+    - Plots can be exported as csv
+
+- Export the visualization
+    - File -> save screenshot (recommended transparent background option)
+    - File -> save animation (takes a screenshot for each timeframe so usually save it into a dedicated directory)
+    - File -> save state (save the state-> file opened, filters, etc.) (can also be used to apply the same filters to different file)
+
