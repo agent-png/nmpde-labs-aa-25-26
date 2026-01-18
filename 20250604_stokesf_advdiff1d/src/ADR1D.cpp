@@ -1,7 +1,7 @@
-#include "ARD1D.hpp"
+#include "ADR1D.hpp"
 
 void
-ARD1D::setup()
+ADR1D::setup()
 {
   std::cout << "===============================================" << std::endl;
 
@@ -96,7 +96,7 @@ ARD1D::setup()
 }
 
 void
-ARD1D::assemble()
+ADR1D::assemble()
 {
   std::cout << "===============================================" << std::endl;
 
@@ -145,7 +145,7 @@ ARD1D::assemble()
       // the current cell.
       fe_values.reinit(cell);
 
-      // We reset the cell matrix and vector (discarding any leftovers from
+      // We reset the cell matrix and vector (discADRing any leftovers from
       // previous element).
       cell_matrix = 0.0;
       cell_rhs    = 0.0;
@@ -245,7 +245,7 @@ ARD1D::assemble()
 }
 
 void
-ARD1D::solve()
+ADR1D::solve()
 {
   std::cout << "===============================================" << std::endl;
 
@@ -267,7 +267,7 @@ ARD1D::solve()
 }
 
 void
-ARD1D::output() const
+ADR1D::output() const
 {
   std::cout << "===============================================" << std::endl;
 
@@ -296,7 +296,7 @@ ARD1D::output() const
 }
 
 double
-ARD1D::compute_error(const VectorTools::NormType &norm_type,
+ADR1D::compute_error(const VectorTools::NormType &norm_type,
                          const Function<dim>         &exact_solution) const
 {
   // The error is an integral, and we approximate that integral using a

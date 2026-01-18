@@ -270,12 +270,7 @@ protected:
   // Outlet pressure [Pa].
   const double p_out = 0.0;
 
-  // Function for inlet velocity. This actually returns an object with four
-  // components (one for each velocity component, and one for the pressure), but
-  // then only the first three are really used (see the component mask when
-  // applying boundary conditions at the end of assembly). If we only return
-  // three components, however, we may get an error message due to this function
-  // being incompatible with the finite element space.
+  // Forcing function
   class Forcing : public Function<dim>
   {
   public:

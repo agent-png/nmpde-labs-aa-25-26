@@ -1,5 +1,5 @@
-#ifndef ARD_1D_HPP
-#define ARD_1D_HPP
+#ifndef ADR_1D_HPP
+#define ADR_1D_HPP
 
 #include <deal.II/base/quadrature_lib.h>
 
@@ -33,14 +33,14 @@ using namespace dealii;
 /**
  * Class managing the differential problem.
  */
-class ARD1D
+class ADR1D
 {
 public:
   // Physical dimension (1D, 2D, 3D)
   static constexpr unsigned int dim = 1;
 
   // Constructor.
-  ARD1D(const unsigned int                              &N_el_,
+  ADR1D(const unsigned int                              &N_el_,
             const unsigned int                              &r_,
             const std::function<double(const Point<dim> &)> &mu_,
             const std::function<double(const Point<dim> &)> &f_)
