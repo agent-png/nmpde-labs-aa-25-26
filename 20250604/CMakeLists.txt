@@ -12,3 +12,6 @@ deal_ii_setup_target(exercise-01)
 
 add_executable(exercise-02 src/exercise-02.cpp src/Stokes.cpp)
 deal_ii_setup_target(exercise-02)
+
+add_executable(exercise-03 src/exercise-03.cpp src/ADR2D.cpp)
+deal_ii_setup_target(exercise-03)
