@@ -1,41 +1,33 @@
 #include "UStokes.hpp"
 
-void UStokes::setup()
+void
+UStokes::setup()
 {
-    pcout << "===============================================" << std::endl;
-
-    // Create the mesh.
-    {
+  // Create the mesh.
+  {
     pcout << "Initializing the mesh" << std::endl;
 
-    // Read serial mesh.
     Triangulation<dim> mesh_serial;
 
-    {
-        GridIn<dim> grid_in;
-        grid_in.attach_triangulation(mesh_serial);
+    GridIn<dim> grid_in;
+    grid_in.attach_triangulation(mesh_serial);
 
-        std::ifstream mesh_file(mesh_file_name);
-        grid_in.read_msh(mesh_file);
-    }
+    std::ifstream grid_in_file(mesh_file_name);
+    grid_in.read_msh(grid_in_file);
 
-    // Copy the serial mesh into the parallel one.
-    {
-        GridTools::partition_triangulation(mpi_size, mesh_serial);
-
-        const auto construction_data = TriangulationDescription::Utilities::
-        create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
-        mesh.create_triangulation(construction_data);
-    }
+    GridTools::partition_triangulation(mpi_size, mesh_serial);
+    const auto construction_data = TriangulationDescription::Utilities::
+      create_description_from_triangulation(mesh_serial, MPI_COMM_WORLD);
+    mesh.create_triangulation(construction_data);
 
     pcout << "  Number of elements = " << mesh.n_global_active_cells()
-            << std::endl;
-    }
+          << std::endl;
+  }
 
-    pcout << "-----------------------------------------------" << std::endl;
+  pcout << "-----------------------------------------------" << std::endl;
 
-    // Initialize the finite element space.
-    {
+  // Initialize the finite element space.
+  {
     pcout << "Initializing the finite element space" << std::endl;
 
     const FE_SimplexP<dim> fe_scalar_velocity(degree_velocity);
@@ -61,12 +53,12 @@ void UStokes::setup()
 
     pcout << "  Quadrature points per face = " << quadrature_face->size()
           << std::endl;
-    }
+  }
 
-    pcout << "-----------------------------------------------" << std::endl;
+  pcout << "-----------------------------------------------" << std::endl;
 
-    // Initialize the DoF handler.
-    {
+  // Initialize the DoF handler.
+  {
     pcout << "Initializing the DoF handler" << std::endl;
 
     dof_handler.reinit(mesh);
@@ -101,11 +93,12 @@ void UStokes::setup()
     pcout << "    velocity = " << n_u << std::endl;
     pcout << "    pressure = " << n_p << std::endl;
     pcout << "    total    = " << n_u + n_p << std::endl;
+  }
 
-    pcout << "-----------------------------------------------" << std::endl;
+  pcout << "-----------------------------------------------" << std::endl;
 
-    // Initialize the linear system.
-    {
+  // Initialize the linear system.
+  {
     pcout << "Initializing the linear system" << std::endl;
 
     pcout << "  Initializing the sparsity pattern" << std::endl;
@@ -151,7 +144,7 @@ void UStokes::setup()
                                     sparsity_pressure_mass);
     sparsity_pressure_mass.compress();
 
-    pcout << "  Initializing the system matrix" << std::endl;
+    pcout << "  Initializing the matrices" << std::endl;
     system_matrix.reinit(sparsity);
     pressure_mass.reinit(sparsity_pressure_mass);
 
@@ -160,54 +153,67 @@ void UStokes::setup()
     pcout << "  Initializing the solution vector" << std::endl;
     solution_owned.reinit(block_owned_dofs, MPI_COMM_WORLD);
     solution.reinit(block_owned_dofs, block_relevant_dofs, MPI_COMM_WORLD);
-    }
+    
+    pcout << "  Initializing the mass matrix" << std::endl;
+    // For time-stepping, we only need the velocity mass matrix
+    for (unsigned int c = 0; c < dim + 1; ++c)
+      {
+        for (unsigned int d = 0; d < dim + 1; ++d)
+          {
+            if ((c < dim) && (d < dim)) // velocity-velocity term
+              coupling[c][d] = DoFTools::always;
+            else // other combinations
+              coupling[c][d] = DoFTools::none;
+          }
+      }
+    TrilinosWrappers::BlockSparsityPattern sparsity_mass(
+      block_owned_dofs, MPI_COMM_WORLD);
+    DoFTools::make_sparsity_pattern(dof_handler, coupling, sparsity_mass);
+    sparsity_mass.compress();
+    mass_matrix.reinit(sparsity_mass);
+    
+    pcout << "  Initializing the old solution vector" << std::endl;
+    solution_old.reinit(block_owned_dofs, MPI_COMM_WORLD);
 }
 }
 
-void UStokes::assemble()
+void
+UStokes::assemble()
 {
   pcout << "===============================================" << std::endl;
-  pcout << "Assembling the system" << std::endl;
+  pcout << "Assembling the system (t = " << current_time << ")" << std::endl;
 
-  // Number of local DoFs for each element.
   const unsigned int dofs_per_cell = fe->dofs_per_cell;
+  const unsigned int n_q           = quadrature->size();
+  const unsigned int n_q_face      = quadrature_face->size();
 
-  // Number of quadrature points for each element.
-  const unsigned int n_q = quadrature->size();
-  const unsigned int n_q_face = quadrature_face->size();
+  FEValues<dim>     fe_values(*fe,
+                              *quadrature,
+                               update_values | update_gradients |
+                               update_quadrature_points | update_JxW_values);
 
-  FEValues<dim> fe_values(*fe,
-                          *quadrature,
-                          update_values | update_gradients |
-                            update_quadrature_points | update_JxW_values);
   FEFaceValues<dim> fe_face_values(*fe,
                                    *quadrature_face,
                                    update_values | update_normal_vectors |
-                                     update_JxW_values);
+                                   update_JxW_values);
 
-
-  // Local matrix and vector.
   FullMatrix<double> cell_matrix(dofs_per_cell, dofs_per_cell);
   FullMatrix<double> cell_pressure_mass_matrix(dofs_per_cell, dofs_per_cell);
+  FullMatrix<double> cell_mass_matrix(dofs_per_cell, dofs_per_cell);
   Vector<double>     cell_rhs(dofs_per_cell);
 
   std::vector<types::global_dof_index> dof_indices(dofs_per_cell);
 
-  // Reset the global matrix and vector, just in case.
   system_matrix = 0.0;
   system_rhs    = 0.0;
   pressure_mass = 0.0;
+  mass_matrix   = 0.0;
+
+  // Make a ghosted copy of the old solution for value extraction on cells.
+  solution = solution_old;
 
   FEValuesExtractors::Vector velocity(0);
   FEValuesExtractors::Scalar pressure(dim);
-
-  // Evaluation of the old solution on quadrature nodes of current cell.
-  std::vector<double> solution_old_values(n_q);
-  std::vector<double> pressure_old_values(n_q);
-
-  // Evaluation of the gradient of the old solution on quadrature nodes of
-  // current cell.
-  std::vector<Tensor<1, dim>> solution_old_grads(n_q);
 
   for (const auto &cell : dof_handler.active_cell_iterators())
     {
@@ -216,95 +222,72 @@ void UStokes::assemble()
 
       fe_values.reinit(cell);
 
-      cell_matrix = 0.0;
-      cell_rhs    = 0.0;
+      cell_matrix               = 0.0;
+      cell_rhs                  = 0.0;
       cell_pressure_mass_matrix = 0.0;
+      cell_mass_matrix          = 0.0;
 
-      // Evaluate the old solution and its gradient on quadrature nodes.
-      fe_values[velocity].get_function_values(solution, solution_old_values);
-      fe_values[velocity].get_function_gradients(solution, solution_old_grads);
-      fe_values.get_function_values(pressure, pressure_old_values);
-      fe_values.get_function_gradients(pressure, pressure_old_grads);
+      std::vector<Tensor<1, dim>> old_velocity_values(n_q);
+      fe_values[velocity].get_function_values(solution, old_velocity_values);
 
       for (unsigned int q = 0; q < n_q; ++q)
         {
-          const double mu_loc = mu(fe_values.quadrature_point(q));
-
-          const double f_old_loc = f(fe_values.quadrature_point(q), time - delta_t);
-          const double f_new_loc = f(fe_values.quadrature_point(q), time);
-
           for (unsigned int i = 0; i < dofs_per_cell; ++i)
             {
+              const unsigned int component_i =
+                fe->system_to_component_index(i).first;
+
               for (unsigned int j = 0; j < dofs_per_cell; ++j)
                 {
-                  // Time derivative.
-                  cell_matrix(i, j) += (1.0 / delta_t) *             //
-                                       fe_values[velocity].shape_value(i, q) * //
-                                       fe_values[velocity].shape_value(j, q) * //
+                  const unsigned int component_j = fe->system_to_component_index(j).first;
+
+                  cell_matrix(i, j) += mu *
+                                       scalar_product(fe_values[velocity].gradient(i, q),
+                                                      fe_values[velocity].gradient(j, q)) *
                                        fe_values.JxW(q);
 
-                  // Diffusion.
-                  cell_matrix(i, j) += theta * mu_loc *                             //
-                        scalar_product(fe_values[velocity].shape_grad(i, q),   //
-                                       fe_values[velocity].shape_grad(j, q)) * //
-                                       fe_values.JxW(q);
-                  // Reaction.
-                  cell_matrix(i, j) += theta * alpha *
-                                       fe_values[velocity].shape_value(i, q) * //
-                                       fe_values[velocity].shape_value(j, q) * //
-                                       fe_values.JxW(q);
+                  // Time derivative term (velocity mass matrix term), only on
+                  // velocity components.
+                  if (component_i < dim && component_j < dim)
+                    {
+                      cell_mass_matrix(i, j) += scalar_product(fe_values[velocity].value(i, q),
+                                                               fe_values[velocity].value(j, q)) * 
+                                                fe_values.JxW(q);
+
+                      cell_matrix(i, j)      += (1.0 / time_step)                               *
+                                                scalar_product(fe_values[velocity].value(i, q),
+                                                               fe_values[velocity].value(j, q)) * 
+                                                fe_values.JxW(q);
+                    }
+
                   // Pressure term in the momentum equation.
-                  cell_matrix(i, j) -= theta * fe_values[velocity].divergence(i, q) *
-                                       fe_values[pressure].value(j, q) *
+                  cell_matrix(i, j) -= fe_values[velocity].divergence(i, q) *
+                                       fe_values[pressure].value(j, q)      *
                                        fe_values.JxW(q);
 
                   // Pressure term in the continuity equation.
                   cell_matrix(i, j) -= fe_values[velocity].divergence(j, q) *
-                                       fe_values[pressure].value(i, q) *
+                                       fe_values[pressure].value(i, q)      *
                                        fe_values.JxW(q);
 
-                  /* Pressure mass matrix.
-                  cell_pressure_mass_matrix(i, j) +=
-                    fe_values[pressure].value(i, q) *
-                    fe_values[pressure].value(j, q) / nu * fe_values.JxW(q);*/
+                  // Pressure mass matrix.
+                  cell_pressure_mass_matrix(i, j) += fe_values[pressure].value(i, q) *
+                                                     fe_values[pressure].value(j, q) * 
+                                                     fe_values.JxW(q);
                 }
 
-              // Time derivative.
-              cell_rhs(i) += (1.0 / delta_t) *             //
-                             fe_values[velocity].shape_value(i, q) * //
-                             solution_old_values[q] *      //
-                             fe_values.JxW(q);
 
-              // Diffusion.
-              cell_rhs(i) -= (1.0 - theta) * mu_loc *                             //
-                    scalar_product(fe_values[velocity].shape_grad(i, q),   //
-                                   solution_old_grads[q]) * //
-                                   fe_values.JxW(q);
-              // Reaction.
-              cell_rhs(i) -= (1.0 - theta) * alpha * 
-                    scalar_product(fe_values[velocity].shape_value(i, q) * //
-                                   solution_old_values[q]) *    //
-                                   fe_values.JxW(q);
-              // Pressure mass matrix
-              cell_rhs(i) -= 
-                (1.0 - theta) * 
-                fe_values[velocity].divergence(i, q) * //
-                pressure_old_values[q] * //
-                fe_values.JxW(q);
-              // Forcing term.
-              cell_rhs(i) +=
-                (theta * f_new_loc + (1.0 - theta) * f_old_loc) * //
-                fe_values[velocity].shape_value(i, q) * //
-                fe_values.JxW(q);
             }
         }
-        // Boundary integral for Neumann BCs.
+
+      // Boundary integral for Neumann BCs.
       if (cell->at_boundary())
         {
           for (unsigned int f = 0; f < cell->n_faces(); ++f)
             {
               if (cell->face(f)->at_boundary() &&
-                  cell->face(f)->boundary_id() == 2)
+                  (cell->face(f)->boundary_id() == 0 || 
+                   cell->face(f)->boundary_id() == 1))
                 {
                   fe_face_values.reinit(cell, f);
 
@@ -312,28 +295,41 @@ void UStokes::assemble()
                     {
                       for (unsigned int i = 0; i < dofs_per_cell; ++i)
                         {
-                          const double p_out = (boundary_id == 0 ? 2.0 : 1.0); 
-                          cell_rhs(i) +=
-                            -p_out *
-                            scalar_product(fe_face_values.normal_vector(q),
-                                           fe_face_values[velocity].value(i, q)) *
-                            fe_face_values.JxW(q);
+                          if(cell->face(f)->boundary_id() == 0){
+                            cell_rhs(i) += -1.0 *
+                                            scalar_product(fe_face_values.normal_vector(q),
+                                                           fe_face_values[velocity].value(i, q)) *
+                                            fe_face_values.JxW(q);
+                          } if(cell->face(f)->boundary_id() == 1){
+                            cell_rhs(i) += -2.0 *
+                                           scalar_product(fe_face_values.normal_vector(q),
+                                                          fe_face_values[velocity].value(i, q)) *
+                                           fe_face_values.JxW(q);
+                          }
+                          
                         }
                     }
                 }
             }
         }
+
       cell->get_dof_indices(dof_indices);
 
       system_matrix.add(dof_indices, cell_matrix);
       system_rhs.add(dof_indices, cell_rhs);
       pressure_mass.add(dof_indices, cell_pressure_mass_matrix);
-
+      mass_matrix.add(dof_indices, cell_mass_matrix);
     }
 
   system_matrix.compress(VectorOperation::add);
   system_rhs.compress(VectorOperation::add);
   pressure_mass.compress(VectorOperation::add);
+  mass_matrix.compress(VectorOperation::add);
+
+  // Add contribution from old solution to RHS: (1/dt) * M * u_old
+  TrilinosWrappers::MPI::Vector tmp(solution_old.block(0));
+  mass_matrix.block(0, 0).vmult(tmp, solution_old.block(0));
+  system_rhs.block(0).add(1.0 / time_step, tmp);
 
   // Dirichlet boundary conditions.
   {
@@ -343,47 +339,77 @@ void UStokes::assemble()
     ComponentMask mask_velocity(dim + 1, true);
     mask_velocity.set(dim, false);
 
-    // We interpolate first the inlet velocity condition alone, then the wall
-    // condition alone, so that the latter "win" over the former where the two
-    // boundaries touch.
-    boundary_functions[0] = &inlet_velocity;
+    Functions::ZeroFunction<dim> zero_function(dim + 1);
+    boundary_functions[2] = &zero_function;
     VectorTools::interpolate_boundary_values(dof_handler,
                                              boundary_functions,
                                              boundary_values,
                                              mask_velocity);
 
     boundary_functions.clear();
-    Functions::ZeroFunction<dim> zero_function(dim + 1);
-    boundary_functions[1] = &zero_function;
+    boundary_functions[3] = &zero_function;
     VectorTools::interpolate_boundary_values(dof_handler,
                                              boundary_functions,
                                              boundary_values,
                                              mask_velocity);
 
-    MatrixTools::apply_boundary_values(
-      boundary_values, system_matrix, solution_owned, system_rhs, false);
+    MatrixTools::apply_boundary_values(boundary_values, system_matrix, solution_owned, system_rhs, false);
   }
 }
 
-void UStokes::solve_linear_system()
+void
+UStokes::solve()
 {
-  PreconditionBlockTriangular preconditioner;
-  preconditioner.initialize(system_matrix.block(0, 0),
-                            pressure_mass.block(1, 1),
-                            system_matrix.block(1, 0));
+  pcout << "===============================================" << std::endl;
+  pcout << "Starting time stepping..." << std::endl;
+  pcout << "  Time step size  = " << time_step << std::endl;
+  pcout << "  Final time      = " << final_time << std::endl;
 
-  ReductionControl solver_control(/* maxiter = */ 10000,
-                                  /* tolerance = */ 1.0e-16,
-                                  /* reduce = */ 1.0e-6);
+  current_time = 0.0;
+  unsigned int time_step_number = 0;
 
-  SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver(solver_control);
+  while (current_time < final_time)
+    {
+      current_time += time_step;
+      time_step_number++;
 
-  solver.solve(system_matrix, solution_owned, system_rhs, preconditioner);
-  solution = solution_owned;
-  pcout << solver_control.last_step() << " GMRES iterations" << std::endl;
+      pcout << std::endl;
+      pcout << "Time step " << time_step_number << " (t = " << current_time
+            << ")" << std::endl;
+
+      // Assemble the system for the current time step
+      assemble();
+
+      // Solve the linear system
+      SolverControl solver_control(2000, 1e-6 * system_rhs.l2_norm());
+      SolverGMRES<TrilinosWrappers::MPI::BlockVector> solver(solver_control);
+
+      PreconditionBlockTriangular preconditioner;
+      preconditioner.initialize(system_matrix.block(0, 0),
+                                pressure_mass.block(1, 1),
+                                system_matrix.block(1, 0));
+
+      pcout << "  Solving the linear system..." << std::endl;
+      solver.solve(system_matrix, solution_owned, system_rhs, preconditioner);
+      pcout << "    " << solver_control.last_step() << " GMRES iterations"
+            << std::endl;
+
+      solution = solution_owned;
+
+      // Update old solution for next time step
+      solution_old = solution_owned;
+
+      // Output results at specific time steps if desired
+      output(time_step_number);
+    }
+
+  pcout << std::endl;
+  pcout << "Time stepping completed." << std::endl;
+  output(time_step_number);
 }
 
-void UStokes::output()
+void
+UStokes::output(const unsigned int time_step_number)
 {
   pcout << "===============================================" << std::endl;
 
@@ -409,48 +435,9 @@ void UStokes::output()
   const std::string output_file_name = "output-stokes";
   data_out.write_vtu_with_pvtu_record("./",
                                       output_file_name,
-                                      0,
+                                      time_step_number,
                                       MPI_COMM_WORLD);
 
   pcout << "Output written to " << output_file_name << std::endl;
   pcout << "===============================================" << std::endl;
-}
-
-void UStokes::run()
-{
-  // Setup initial conditions.
-  {
-    setup();
-
-    VectorTools::interpolate(dof_handler, zero_function, solution_owned);
-    solution = solution_owned;
-
-    time            = 0.0;
-    timestep_number = 0;
-
-    // Output initial condition.
-    output();
-  }
-
-  pcout << "===============================================" << std::endl;
-
-  // Time-stepping loop.
-  while (time < T - 0.5 * delta_t)
-    {
-      time += delta_t;
-      ++timestep_number;
-
-      pcout << "Timestep " << std::setw(3) << timestep_number
-            << ", time = " << std::setw(4) << std::fixed << std::setprecision(2)
-            << time << " : ";
-
-      assemble();
-      solve_linear_system();
-
-      // Perform parallel communication to update the ghost values of the
-      // solution vector.
-      solution = solution_owned;
-
-      output();
-    }
 }
